@@ -8,6 +8,8 @@ Outputs ../frontend/src/types/generated.ts via json-schema-to-typescript.
 """
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -22,6 +24,7 @@ from app.models.agents import (  # noqa: E402  # type: ignore[import]
 )
 from app.models.common import (  # noqa: E402  # type: ignore[import]
     BubbleContent,
+    ReviewItem,
     SpeechContent,
     TodoItem,
 )
@@ -65,6 +68,7 @@ MODELS = [
     BubbleContent,
     SpeechContent,
     TodoItem,
+    ReviewItem,
     # Legacy event models (kept for compatibility; producers still emit the
     # flat wire format that the union below parses). The frontend consumes
     # ``Event`` / ``EventData`` / ``EventType`` from these — the family event
@@ -108,22 +112,34 @@ _, full_schema = models_json_schema(
 schema_path = Path(__file__).parent / ".gen_types_schema.json"
 schema_path.write_text(json.dumps(full_schema, indent=2), encoding="utf-8")
 
-# Convert to TypeScript
+# Convert to TypeScript. Prefer bunx; fall back to npx when bun is not
+# installed (the Makefile-level package-manager detection made the same
+# choice for installs).
 output_path = Path(__file__).parent.parent / "frontend" / "src" / "types" / "generated.ts"
+runner = "bunx" if shutil.which("bunx") else "npx"
+if shutil.which(runner) is None:
+    print(
+        "Error: neither bunx nor npx found on PATH — install bun or Node.js",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+json2ts_cmd = [
+    runner,
+    *(["--yes"] if runner == "npx" else []),
+    "json2ts",
+    "--input",
+    str(schema_path),
+    "--output",
+    str(output_path),
+    "--unreachableDefinitions",
+]
 try:
     result = subprocess.run(
-        [
-            "bunx",
-            "json2ts",
-            "--input",
-            str(schema_path),
-            "--output",
-            str(output_path),
-            "--unreachableDefinitions",
-        ],
+        json2ts_cmd,
         capture_output=True,
         text=True,
         check=True,
+        shell=(os.name == "nt"),  # bunx/npx are .cmd shims on Windows
         cwd=str(Path(__file__).parent.parent / "frontend"),
     )
     if result.stdout:

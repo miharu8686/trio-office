@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from app.models.agents import Agent, Boss, OfficeState
-from app.models.common import TodoItem
+from app.models.common import ReviewItem, TodoItem
 
 __all__ = [
     "ConversationEntry",
@@ -156,3 +156,4 @@ class GameState(BaseModel):
     )
     floor_id: str | None = None
     room_id: str | None = None
+    review_queue: list[ReviewItem] = Field(default_factory=lambda: cast(list[ReviewItem], []))

@@ -20,7 +20,14 @@ from app.models.agents import (
     OfficeState,
     PhoneState,
 )
-from app.models.common import BubbleContent, BubbleType, TodoItem, TodoStatus
+from app.models.common import (
+    BubbleContent,
+    BubbleType,
+    ReviewItem,
+    ReviewItemType,
+    TodoItem,
+    TodoStatus,
+)
 from app.models.events import (
     AgentEvent,
     AgentEventData,
@@ -153,6 +160,45 @@ def resolve_agent_for_stop(
 
 
 # ---------------------------------------------------------------------------
+# PO review desk queue -- items the agent is waiting on the human for.
+# ---------------------------------------------------------------------------
+
+
+def _push_review_item(
+    sm: "StateMachine",
+    event: AnyEvent,
+    item_type: ReviewItemType,
+    label: str,
+) -> None:
+    """Stack a document on the PO review desk.
+
+    Deduplication: a COMPLETION item replaces any previous COMPLETION (a
+    session has one pending report, and its wait clock starts at the latest
+    Stop). PERMISSION/INPUT items with an identical label are kept (first
+    occurrence wins) so the wait time reflects when the block began. The
+    queue is bounded by ``MAX_REVIEW_ITEMS`` (oldest dropped first).
+
+    Uses only event-supplied data (no wall clock), so DB replay rebuilds the
+    exact same queue.
+    """
+    if item_type is ReviewItemType.COMPLETION:
+        sm.review_queue = [i for i in sm.review_queue if i.item_type is not item_type]
+    elif any(i.item_type is item_type and i.label == label for i in sm.review_queue):
+        return
+
+    sm.review_queue.append(
+        ReviewItem(
+            id=f"{item_type.value}-{event.timestamp.isoformat()}",
+            item_type=item_type,
+            label=label,
+            created_at=event.timestamp,
+        )
+    )
+    if len(sm.review_queue) > sm.MAX_REVIEW_ITEMS:
+        sm.review_queue = sm.review_queue[-sm.MAX_REVIEW_ITEMS :]
+
+
+# ---------------------------------------------------------------------------
 # Todo parsing -- extracted from StateMachine for single-responsibility.
 # ---------------------------------------------------------------------------
 
@@ -277,6 +323,8 @@ def _handle_user_prompt_submit(sm: "StateMachine", event: AnyEvent) -> None:
     sm.print_report = False
     sm.turn_active = True
     sm.last_user_prompt = prompt_text
+    # The PO has judged and issued the next instruction — clear the desk.
+    sm.review_queue.clear()
     if prompt_text:
         sm.boss_bubble = BubbleContent(
             type=BubbleType.SPEECH,
@@ -297,6 +345,8 @@ def _handle_permission_request(sm: "StateMachine", event: AnyEvent) -> None:
         text=f"Waiting: {tool_name}",
         icon="❓",
     )
+
+    _push_review_item(sm, event, ReviewItemType.PERMISSION, tool_name)
 
     if agent_id == "main":
         sm.boss_state = BossState.WAITING_PERMISSION
@@ -410,6 +460,30 @@ def _handle_stop(sm: "StateMachine", event: AnyEvent) -> None:
 
     sm.whiteboard.add_news_item("session", "Job completed! Great work everyone!")
 
+    # A finished turn means any permission/input block was resolved (or
+    # abandoned) — the only thing still waiting on the PO is the report.
+    # Leaving resolved blocks on the desk would show a phantom bottleneck.
+    sm.review_queue = [i for i in sm.review_queue if i.item_type is ReviewItemType.COMPLETION]
+    label = sm.boss_current_task or "Report delivered"
+    _push_review_item(sm, event, ReviewItemType.COMPLETION, label[:60])
+
+
+def _handle_notification(sm: "StateMachine", event: AnyEvent) -> None:
+    """Handle NOTIFICATION: stack an input-wait item on the PO review desk.
+
+    Permission-flavoured notifications are skipped — Claude Code emits a
+    Notification alongside PermissionRequest for the same block, and the
+    PERMISSION item already covers it. This is a wording heuristic and will
+    silently stop deduplicating if Claude Code changes the notification
+    message; the failure mode is a duplicate INPUT item, not a crash.
+    """
+    assert isinstance(event, LifecycleEvent)
+    message = event.data.message or ""
+    if "permission" in message.lower():
+        return
+    label = message or event.data.notification_type or "Waiting for input"
+    _push_review_item(sm, event, ReviewItemType.INPUT, label[:60])
+
 
 def _handle_session_end(sm: "StateMachine", event: AnyEvent) -> None:
     """Handle SESSION_END: mark session as ended."""
@@ -492,6 +566,7 @@ _DISPATCH_TABLE: dict[EventType, Callable[["StateMachine", AnyEvent], None]] = {
     EventType.SUBAGENT_STOP: _handle_subagent_stop,
     EventType.CLEANUP: _handle_cleanup,
     EventType.STOP: _handle_stop,
+    EventType.NOTIFICATION: _handle_notification,
     EventType.SESSION_END: _handle_session_end,
     EventType.BACKGROUND_TASK_NOTIFICATION: _handle_background_task_notification,
     EventType.TASK_CREATED: _handle_task_created,
@@ -548,6 +623,7 @@ class StateMachine:
     MAX_AGENTS = 8
     MAX_CONTEXT_TOKENS = 200_000
     MAX_CONVERSATION_ENTRIES = 500
+    MAX_REVIEW_ITEMS = 30
     # Desk grid shape — keep in sync with frontend/src/constants/positions.ts
     # (DESKS_PER_ROW / MIN_DESK_COUNT). A shared cross-component source is
     # intentionally out of scope; update both sides together when changing the grid.
@@ -573,6 +649,9 @@ class StateMachine:
     # terminal into the "done" zone and back every tool cycle.
     turn_active: bool = False
     last_user_prompt: str | None = None
+    # Items waiting on the PO (Stop reports, permission requests, input
+    # requests). Cleared by the next USER_PROMPT_SUBMIT. See trio-view docs.
+    review_queue: list[ReviewItem] = field(default_factory=lambda: cast(list[ReviewItem], []))
     background_tasks: list[BackgroundTask] = field(default_factory=_empty_background_tasks)
     conversation: list[ConversationEntry] = field(default_factory=_empty_conversation)
 
@@ -691,6 +770,7 @@ class StateMachine:
             conversation=self.conversation.copy(),
             floor_id=self.floor_id,
             room_id=self.room_id,
+            review_queue=self.review_queue.copy(),
         )
 
     def remove_agent(self, agent_id: str) -> None:

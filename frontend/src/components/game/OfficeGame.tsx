@@ -62,6 +62,7 @@ import {
   WATER_COOLER_POSITION,
   COFFEE_MACHINE_POSITION,
   PRINTER_STATION_POSITION,
+  PO_REVIEW_DESK_POSITION,
   PLANT_POSITION,
   BOSS_RUG_POSITION,
   TRASH_CAN_OFFSET,
@@ -87,6 +88,7 @@ import { CityWindow } from "./CityWindow";
 import { EmployeeOfTheMonth } from "./EmployeeOfTheMonth";
 import { Elevator, isAgentInElevator } from "./Elevator";
 import { PrinterStation } from "./PrinterStation";
+import { PoReviewDesk } from "./PoReviewDesk";
 import { DebugOverlays } from "./DebugOverlays";
 import {
   DeskSurfacesBase,
@@ -443,6 +445,12 @@ export function OfficeGame(): ReactNode {
                     }
                     deskTexture={textures.desk}
                     printerTexture={textures.printer}
+                  />
+
+                  {/* PO review desk - bottom right corner (trio view) */}
+                  <PoReviewDesk
+                    x={PO_REVIEW_DESK_POSITION.x}
+                    y={PO_REVIEW_DESK_POSITION.y}
                   />
 
                   {/* Plant - to the right of printer */}

@@ -24,6 +24,8 @@ export type {
   SpeechContent,
   TodoStatus,
   TodoItem,
+  ReviewItem,
+  ReviewItemType,
   // Office state
   OfficeState,
   ElevatorState,

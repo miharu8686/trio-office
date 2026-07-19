@@ -314,6 +314,17 @@ export type Backgroundtasks = BackgroundTask[];
 export type Conversation = ConversationEntry[];
 export type Floorid = string | null;
 export type Roomid = string | null;
+export type Id3 = string;
+/**
+ * Kind of item waiting on the PO review desk.
+ *
+ * This interface was referenced by `ClaudeOfficeBackendTypes`'s JSON-Schema
+ * via the `definition` "ReviewItemType".
+ */
+export type ReviewItemType = "completion" | "permission" | "input";
+export type Label = string;
+export type CreatedAt = string;
+export type Reviewqueue = ReviewItem[];
 /**
  * Current branch name
  */
@@ -391,8 +402,8 @@ export type CacheCreationTokens5 = number | null;
 export type FloorId5 = string | null;
 export type RoomId5 = string | null;
 export type Prompt1 = string | null;
-export type Id3 = string;
-export type CreatedAt = string;
+export type Id4 = string;
+export type CreatedAt1 = string;
 export type UpdatedAt = string;
 export type Status2 = string;
 export type EventCount = number;
@@ -809,6 +820,7 @@ export interface GameState {
   conversation?: Conversation;
   floorId?: Floorid;
   roomId?: Roomid;
+  reviewQueue?: Reviewqueue;
   [k: string]: unknown;
 }
 /**
@@ -918,6 +930,23 @@ export interface NewsItem {
 }
 export interface Fileedits {
   [k: string]: number;
+}
+/**
+ * A document stacked on the PO review desk.
+ *
+ * Represents one thing the agent is waiting on the human for. Created by
+ * Stop / PermissionRequest / Notification events and cleared by the next
+ * UserPromptSubmit in the same session (the PO has judged and moved on).
+ *
+ * This interface was referenced by `ClaudeOfficeBackendTypes`'s JSON-Schema
+ * via the `definition` "ReviewItem".
+ */
+export interface ReviewItem {
+  id: Id3;
+  item_type: ReviewItemType;
+  label: Label;
+  created_at: CreatedAt;
+  [k: string]: unknown;
 }
 /**
  * Current git repository status.
@@ -1030,8 +1059,8 @@ export interface PromptEventData {
  * via the `definition` "Session".
  */
 export interface Session {
-  id: Id3;
-  created_at: CreatedAt;
+  id: Id4;
+  created_at: CreatedAt1;
   updated_at: UpdatedAt;
   status: Status2;
   event_count: EventCount;
