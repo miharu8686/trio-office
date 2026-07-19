@@ -50,7 +50,7 @@ from app.core.handlers import (
 from app.core.jsonl_parser import get_last_assistant_response
 from app.core.product_mapper import get_product_mapper
 from app.core.room_orchestrator import RoomOrchestrator
-from app.core.state_machine import StateMachine
+from app.core.state_machine import StateMachine, resolve_agent_for_stop
 from app.core.task_file_poller import init_task_file_poller
 from app.core.task_persistence import load_tasks, save_tasks
 from app.core.transcript_poller import init_transcript_poller
@@ -465,6 +465,53 @@ class EventProcessor:
     # Internal routing
     # ------------------------------------------------------------------
 
+    _DISPLAY_KEY_PREFIX = "subagent_"
+    _TOOL_USE_ID_PREFIX = "toolu_"
+
+    def _normalize_tool_event_attribution(self, event: AnyEvent) -> None:
+        """Normalize hook-attributed subagent IDs to display keys, in place.
+
+        Hooks attribute PreToolUse/PostToolUse events to
+        ``subagent_<native_agent_id>`` (the native agent ID Claude Code puts
+        in the hook payload), while agents are registered in
+        ``StateMachine.agents`` under ``subagent_<tool_use_id>`` by
+        SUBAGENT_START. This rewrites the event's ``agent_id`` to the
+        registered display key so the event patches the existing agent
+        instead of spawning a ghost duplicate.
+
+        Resolution reuses :func:`resolve_agent_for_stop` (native-ID match
+        first, then FIFO late-linking of the oldest unlinked agent), so an
+        event arriving before its SUBAGENT_INFO link is resolved the same way
+        a SUBAGENT_STOP would be. When nothing resolves (e.g. session not in
+        memory yet), the ID is left as-is: after a backend restart, ghost
+        agents are registered under ``subagent_<native_agent_id>`` and the
+        unmodified ID matches them directly.
+        """
+        if event.event_type not in (EventType.PRE_TOOL_USE, EventType.POST_TOOL_USE):
+            return
+        agent_id = event.data.agent_id
+        if not agent_id or not agent_id.startswith(self._DISPLAY_KEY_PREFIX):
+            return
+
+        sm = self.sessions.get(event.session_id)
+        if sm is None or agent_id in sm.agents:
+            return
+
+        native_agent_id = agent_id.removeprefix(self._DISPLAY_KEY_PREFIX)
+        if native_agent_id.startswith(self._TOOL_USE_ID_PREFIX):
+            # Already a display key (subagent_<tool_use_id>); the agent is just
+            # no longer registered (e.g. event raced SUBAGENT_STOP). Attempting
+            # native-ID resolution here would FIFO-link a wrong agent.
+            return
+        resolved = resolve_agent_for_stop(
+            agents=sm.agents,
+            arrival_queue=sm.arrival_queue,
+            agent_id=None,
+            native_agent_id=native_agent_id,
+        )
+        if resolved:
+            event.data.agent_id = resolved.agent_id
+
     async def _process_event_internal(self, event: AnyEvent) -> None:
         """Persist event, update state machine, build history, and delegate to handlers.
 
@@ -480,6 +527,10 @@ class EventProcessor:
         Args:
             event: The incoming hook event.
         """
+        # Normalize hook-side subagent attribution BEFORE persisting so the
+        # DB and every downstream consumer see the display key.
+        self._normalize_tool_event_attribution(event)
+
         # Resolve floor/room assignment BEFORE persisting so the assignment
         # is written in the same DB session (avoids StaleDataError from a
         # separate _sync_room_to_db call).

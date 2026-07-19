@@ -41,8 +41,12 @@ class TestTranscriptPoller:
             Path(temp_path).unlink(missing_ok=True)
 
     @pytest.mark.asyncio
-    async def test_parses_tool_use_events(self) -> None:
-        """Should parse tool_use from assistant messages."""
+    async def test_ignores_tool_use_and_tool_result_blocks(self) -> None:
+        """Tool blocks must not produce events — hooks own tool attribution.
+
+        Synthesizing pre/post_tool_use here would double-count every subagent
+        tool call (once from the hook, once from the poller).
+        """
         callback = AsyncMock()
         poller = TranscriptPoller(callback)
 
@@ -54,54 +58,8 @@ class TestTranscriptPoller:
                 await poller.start_polling("agent1", "session1", temp_path)
                 await asyncio.sleep(0.05)
 
-                # Write a tool_use event
+                # Write a tool_use followed by its tool_result
                 with open(temp_path, "a", encoding="utf-8") as f:
-                    record = {
-                        "type": "assistant",
-                        "message": {
-                            "role": "assistant",
-                            "content": [
-                                {
-                                    "type": "tool_use",
-                                    "id": "tool123",
-                                    "name": "Read",
-                                    "input": {"file_path": "/test.py"},
-                                }
-                            ],
-                        },
-                    }
-                    f.write(json.dumps(record) + "\n")
-
-                # Wait for poll
-                await asyncio.sleep(0.2)
-                await poller.stop_polling("agent1")
-
-            # Should have called callback with pre_tool_use event
-            assert callback.call_count >= 1
-            event = callback.call_args_list[0][0][0]
-            assert event.event_type == EventType.PRE_TOOL_USE
-            assert event.data.tool_name == "Read"
-            assert event.data.agent_id == "agent1"
-        finally:
-            Path(temp_path).unlink(missing_ok=True)
-
-    @pytest.mark.asyncio
-    async def test_parses_tool_result_events(self) -> None:
-        """Should parse tool_result from user messages."""
-        callback = AsyncMock()
-        poller = TranscriptPoller(callback)
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
-            temp_path = f.name
-
-        try:
-            with patch("app.core.transcript_poller.POLL_INTERVAL_SECONDS", TEST_POLL_INTERVAL):
-                await poller.start_polling("agent1", "session1", temp_path)
-                await asyncio.sleep(0.05)
-
-                # Write a tool_use followed by tool_result
-                with open(temp_path, "a", encoding="utf-8") as f:
-                    # Tool use
                     tool_use = {
                         "type": "assistant",
                         "message": {
@@ -118,7 +76,6 @@ class TestTranscriptPoller:
                     }
                     f.write(json.dumps(tool_use) + "\n")
 
-                    # Tool result
                     tool_result = {
                         "type": "user",
                         "message": {
@@ -139,18 +96,14 @@ class TestTranscriptPoller:
                 await asyncio.sleep(0.2)
                 await poller.stop_polling("agent1")
 
-            # Should have pre_tool_use and post_tool_use
-            assert callback.call_count >= 2
-            events = [call[0][0] for call in callback.call_args_list]
-            types = [e.event_type for e in events]
-            assert EventType.PRE_TOOL_USE in types
-            assert EventType.POST_TOOL_USE in types
+            # No events at all — tool blocks are ignored by design
+            assert callback.call_count == 0
         finally:
             Path(temp_path).unlink(missing_ok=True)
 
     @pytest.mark.asyncio
-    async def test_skips_task_tool(self) -> None:
-        """Should skip Task tool (subagent spawning)."""
+    async def test_emits_thinking_and_text_bubbles(self) -> None:
+        """Thinking and text blocks must still produce AGENT_UPDATE bubbles."""
         callback = AsyncMock()
         poller = TranscriptPoller(callback)
 
@@ -162,19 +115,14 @@ class TestTranscriptPoller:
                 await poller.start_polling("agent1", "session1", temp_path)
                 await asyncio.sleep(0.05)
 
-                # Write a Task tool_use event
                 with open(temp_path, "a", encoding="utf-8") as f:
                     record = {
                         "type": "assistant",
                         "message": {
                             "role": "assistant",
                             "content": [
-                                {
-                                    "type": "tool_use",
-                                    "id": "tool789",
-                                    "name": "Task",
-                                    "input": {"prompt": "Do something"},
-                                }
+                                {"type": "thinking", "thinking": "Pondering the file layout"},
+                                {"type": "text", "text": "Here is my summary."},
                             ],
                         },
                     }
@@ -184,8 +132,12 @@ class TestTranscriptPoller:
                 await asyncio.sleep(0.2)
                 await poller.stop_polling("agent1")
 
-            # Should NOT have called callback for Task tool
-            assert callback.call_count == 0
+            events = [call[0][0] for call in callback.call_args_list]
+            assert len(events) == 2
+            assert all(e.event_type == EventType.AGENT_UPDATE for e in events)
+            assert all(e.data.agent_id == "agent1" for e in events)
+            assert events[0].data.thinking == "Pondering the file layout"
+            assert events[1].data.summary == "Here is my summary."
         finally:
             Path(temp_path).unlink(missing_ok=True)
 
