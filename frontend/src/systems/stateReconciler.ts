@@ -276,6 +276,8 @@ export function reconcileState(state: GameState, ctx: ReconcilerContext): void {
     store.setToolUsesSinceCompaction(state.office.toolUsesSinceCompaction);
   }
   store.setTodos(state.todos ?? []);
+  // Sync PO review desk queue (trio view).
+  store.setReviewQueue(state.reviewQueue ?? []);
   // Sync print report flag (triggers printer animation).
   store.setPrintReport(state.office.printReport ?? false);
   // Sync whiteboard data for multi-mode display.

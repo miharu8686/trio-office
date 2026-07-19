@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
@@ -9,6 +10,8 @@ __all__ = [
     "SpeechContent",
     "TodoStatus",
     "TodoItem",
+    "ReviewItemType",
+    "ReviewItem",
 ]
 
 
@@ -42,6 +45,28 @@ class TodoStatus(StrEnum):
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
+
+
+class ReviewItemType(StrEnum):
+    """Kind of item waiting on the PO review desk."""
+
+    COMPLETION = "completion"  # Stop — a finished report awaiting review
+    PERMISSION = "permission"  # PermissionRequest — blocked on an approval
+    INPUT = "input"  # Notification — waiting for user input
+
+
+class ReviewItem(BaseModel):
+    """A document stacked on the PO review desk.
+
+    Represents one thing the agent is waiting on the human for. Created by
+    Stop / PermissionRequest / Notification events and cleared by the next
+    UserPromptSubmit in the same session (the PO has judged and moved on).
+    """
+
+    id: str
+    item_type: ReviewItemType
+    label: str
+    created_at: datetime
 
 
 class TodoItem(BaseModel):

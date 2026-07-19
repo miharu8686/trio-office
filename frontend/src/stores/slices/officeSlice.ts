@@ -11,6 +11,7 @@ import type {
   ElevatorState,
   PhoneState,
   TodoItem,
+  ReviewItem,
   GitStatus,
   WebSocketMessage,
   ConversationEntry,
@@ -31,6 +32,7 @@ export type OfficeSlice = {
   compactionPhase: CompactionAnimationPhase;
   printReport: boolean;
   todos: TodoItem[];
+  reviewQueue: ReviewItem[];
   gitStatus: GitStatus | null;
   eventLog: EventLogEntry[];
   conversation: ConversationEntry[];
@@ -45,6 +47,7 @@ export type OfficeSlice = {
   setCompactionPhase: (phase: CompactionAnimationPhase) => void;
   setIsCompacting: (isCompacting: boolean) => void;
   setTodos: (todos: TodoItem[]) => void;
+  setReviewQueue: (reviewQueue: ReviewItem[]) => void;
   setPrintReport: (printReport: boolean) => void;
   setGitStatus: (status: GitStatus | null) => void;
   addEventLog: (event: NonNullable<WebSocketMessage["event"]>) => void;
@@ -62,6 +65,7 @@ export const initialOfficeState = {
   compactionPhase: "idle" as CompactionAnimationPhase,
   printReport: false,
   todos: [] as TodoItem[],
+  reviewQueue: [] as ReviewItem[],
   gitStatus: null as GitStatus | null,
   eventLog: [] as EventLogEntry[],
   conversation: [] as ConversationEntry[],
@@ -93,6 +97,7 @@ export const createOfficeSlice: StateCreator<GameStore, [], [], OfficeSlice> = (
   setCompactionPhase: (compactionPhase) => set({ compactionPhase }),
   setIsCompacting: (isCompacting) => set({ isCompacting }),
   setTodos: (todos) => set({ todos }),
+  setReviewQueue: (reviewQueue) => set({ reviewQueue }),
   setPrintReport: (printReport) => set({ printReport }),
   setGitStatus: (gitStatus) => set({ gitStatus }),
 

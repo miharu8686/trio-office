@@ -42,6 +42,9 @@ export const PRINTER_STATION_POSITION = { x: 50, y: 945 };
 /** Plant position (to the right of printer) */
 export const PLANT_POSITION = { x: 118, y: 970 };
 
+/** PO review desk position (bottom right corner, trio view) */
+export const PO_REVIEW_DESK_POSITION = { x: 1055, y: 930 };
+
 // ============================================================================
 // BOSS AREA
 // ============================================================================

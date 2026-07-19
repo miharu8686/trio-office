@@ -185,3 +185,105 @@ class TestOfficePhase:
         """All phases should have unique values."""
         values = [p.value for p in OfficePhase]
         assert len(values) == len(set(values))
+
+
+class TestReviewQueue:
+    """Tests for the PO review desk queue."""
+
+    @staticmethod
+    def _event(event_type: str, data: dict[str, object], ts: str = "2026-07-20T10:00:00+00:00"):
+        from app.models.events import EventAdapter
+
+        return EventAdapter.validate_python(
+            {
+                "event_type": event_type,
+                "session_id": "s1",
+                "timestamp": ts,
+                "data": data,
+            }
+        )
+
+    def test_stop_stacks_completion_item(self) -> None:
+        from app.models.common import ReviewItemType
+
+        sm = StateMachine()
+        sm.transition(self._event("stop", {}))
+        assert len(sm.review_queue) == 1
+        item = sm.review_queue[0]
+        assert item.item_type is ReviewItemType.COMPLETION
+        assert item.created_at.isoformat() == "2026-07-20T10:00:00+00:00"
+
+    def test_second_stop_replaces_completion_item(self) -> None:
+        sm = StateMachine()
+        sm.transition(self._event("stop", {}))
+        sm.transition(self._event("stop", {}, ts="2026-07-20T10:05:00+00:00"))
+        assert len(sm.review_queue) == 1
+        assert sm.review_queue[0].created_at.isoformat() == "2026-07-20T10:05:00+00:00"
+
+    def test_permission_request_stacks_permission_item(self) -> None:
+        from app.models.common import ReviewItemType
+
+        sm = StateMachine()
+        sm.transition(self._event("permission_request", {"tool_name": "Bash"}))
+        assert len(sm.review_queue) == 1
+        assert sm.review_queue[0].item_type is ReviewItemType.PERMISSION
+        assert sm.review_queue[0].label == "Bash"
+
+    def test_duplicate_permission_label_keeps_first(self) -> None:
+        sm = StateMachine()
+        sm.transition(self._event("permission_request", {"tool_name": "Bash"}))
+        sm.transition(
+            self._event("permission_request", {"tool_name": "Bash"}, ts="2026-07-20T10:09:00+00:00")
+        )
+        assert len(sm.review_queue) == 1
+        assert sm.review_queue[0].created_at.isoformat() == "2026-07-20T10:00:00+00:00"
+
+    def test_notification_stacks_input_item(self) -> None:
+        from app.models.common import ReviewItemType
+
+        sm = StateMachine()
+        sm.transition(self._event("notification", {"message": "Claude is waiting for your input"}))
+        assert len(sm.review_queue) == 1
+        assert sm.review_queue[0].item_type is ReviewItemType.INPUT
+
+    def test_permission_flavoured_notification_skipped(self) -> None:
+        sm = StateMachine()
+        sm.transition(
+            self._event("notification", {"message": "Claude needs your permission to use Bash"})
+        )
+        assert len(sm.review_queue) == 0
+
+    def test_user_prompt_submit_clears_queue(self) -> None:
+        sm = StateMachine()
+        sm.transition(self._event("stop", {}))
+        sm.transition(self._event("permission_request", {"tool_name": "Bash"}))
+        sm.transition(self._event("user_prompt_submit", {"prompt": "next instruction"}))
+        assert sm.review_queue == []
+
+    def test_queue_bounded_by_max_review_items(self) -> None:
+        sm = StateMachine()
+        for i in range(sm.MAX_REVIEW_ITEMS + 5):
+            sm.transition(
+                self._event(
+                    "permission_request",
+                    {"tool_name": f"Tool{i}"},
+                    ts=f"2026-07-20T10:{i:02d}:00+00:00" if i < 60 else "2026-07-20T11:00:00+00:00",
+                )
+            )
+        assert len(sm.review_queue) == sm.MAX_REVIEW_ITEMS
+
+    def test_review_queue_in_game_state(self) -> None:
+        sm = StateMachine()
+        sm.transition(self._event("stop", {}))
+        state = sm.to_game_state("s1")
+        assert len(state.review_queue) == 1
+
+    def test_stop_clears_resolved_permission_and_input_items(self) -> None:
+        """A finished turn clears permission/input blocks; only the report stays."""
+        from app.models.common import ReviewItemType
+
+        sm = StateMachine()
+        sm.transition(self._event("permission_request", {"tool_name": "Bash"}))
+        sm.transition(self._event("notification", {"message": "Claude is waiting for your input"}))
+        sm.transition(self._event("stop", {}, ts="2026-07-20T10:10:00+00:00"))
+        assert [i.item_type for i in sm.review_queue] == [ReviewItemType.COMPLETION]
