@@ -1,0 +1,8 @@
+* text=auto
+*.sh text eol=lf
+*.py text
+*.ts text
+*.tsx text
+*.json text
+*.md text
+*.png binary
