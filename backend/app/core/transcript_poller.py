@@ -1,4 +1,11 @@
-"""Poll subagent transcript files for tool use events in real-time."""
+"""Poll subagent transcript files for thinking/text bubbles in real-time.
+
+Tool attribution is owned by the hooks (PreToolUse/PostToolUse payloads carry
+the native agent ID), so this poller intentionally does NOT synthesize
+pre/post_tool_use events — doing so double-counted every subagent tool call.
+It only extracts thinking and text blocks for speech/thought bubbles, and
+detects zombie subagents.
+"""
 
 import asyncio
 import json
@@ -17,8 +24,6 @@ from app.models.events import (
     AgentEventData,
     AnyEvent,
     EventType,
-    ToolEvent,
-    ToolEventData,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,7 +49,6 @@ class PolledAgent:
     transcript_path: Path
     file_position: int = 0
     last_activity: datetime = field(default_factory=lambda: datetime.now(UTC))
-    active_tool_ids: set[str] = field(default_factory=lambda: set[str]())
     last_thinking_hash: int = 0
     last_text_hash: int = 0
 
@@ -194,7 +198,12 @@ class TranscriptPoller(BasePoller[PolledAgent]):
         return events
 
     def _parse_content(self, agent: PolledAgent, content: str) -> list[AnyEvent]:
-        """Parse JSONL content and extract tool use, thinking, and text events."""
+        """Parse JSONL content and extract thinking and text bubble events.
+
+        Tool-use blocks are intentionally ignored: hook events already carry
+        correct per-subagent attribution, and synthesizing tool events here
+        would double-count them.
+        """
         events: list[AnyEvent] = []
 
         for line in content.split("\n"):
@@ -218,14 +227,7 @@ class TranscriptPoller(BasePoller[PolledAgent]):
                     block = cast(dict[str, Any], item)
                     block_type: str | None = block.get("type")
 
-                    if block_type == "tool_use":
-                        event = self._create_pre_tool_use_event(agent, block)
-                        if event:
-                            events.append(event)
-                            tool_id: str = block.get("id", "")
-                            agent.active_tool_ids.add(tool_id)
-
-                    elif block_type == "thinking":
+                    if block_type == "thinking":
                         thinking_text: str = block.get("thinking", "")
                         if thinking_text:
                             text_hash = hash(thinking_text[:200])
@@ -245,64 +247,7 @@ class TranscriptPoller(BasePoller[PolledAgent]):
                                 if event:
                                     events.append(event)
 
-            elif record_type == "user" and message.get("role") == "user":
-                for item in content_blocks:
-                    if not isinstance(item, dict):
-                        continue
-                    block = cast(dict[str, Any], item)
-                    if block.get("type") == "tool_result":
-                        tool_use_id: str = block.get("tool_use_id", "")
-                        if tool_use_id in agent.active_tool_ids:
-                            event = self._create_post_tool_use_event(agent, block)
-                            if event:
-                                events.append(event)
-                            agent.active_tool_ids.discard(tool_use_id)
-
         return events
-
-    def _create_pre_tool_use_event(
-        self, agent: PolledAgent, block: dict[str, Any]
-    ) -> ToolEvent | None:
-        """Create a pre_tool_use event from a tool_use block."""
-        tool_name = block.get("name")
-        if not tool_name:
-            return None
-
-        if tool_name == "Task":
-            return None
-
-        tool_input = block.get("input", {})
-        tool_use_id = block.get("id", "")
-
-        return ToolEvent(
-            event_type=EventType.PRE_TOOL_USE,
-            session_id=agent.session_id,
-            timestamp=datetime.now(UTC),
-            data=ToolEventData(
-                agent_id=agent.agent_id,
-                tool_name=tool_name,
-                tool_input=tool_input,
-                tool_use_id=tool_use_id,
-            ),
-        )
-
-    def _create_post_tool_use_event(
-        self, agent: PolledAgent, block: dict[str, Any]
-    ) -> ToolEvent | None:
-        """Create a post_tool_use event from a tool_result block."""
-        tool_use_id = block.get("tool_use_id", "")
-        is_error = block.get("is_error", False)
-
-        return ToolEvent(
-            event_type=EventType.POST_TOOL_USE,
-            session_id=agent.session_id,
-            timestamp=datetime.now(UTC),
-            data=ToolEventData(
-                agent_id=agent.agent_id,
-                tool_use_id=tool_use_id,
-                success=not is_error,
-            ),
-        )
 
     def _create_thinking_event(self, agent: PolledAgent, thinking_text: str) -> AgentEvent:
         """Create an agent update event for thinking content."""
