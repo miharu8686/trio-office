@@ -90,6 +90,27 @@ def _build_agent_transcript_path(main_transcript: str | None, native_agent_id: s
     return f"{session_dir}/subagents/agent-{native_agent_id}.jsonl"
 
 
+def _resolve_tool_event_agent_id(raw_data: dict[str, Any]) -> str:
+    """Resolve which agent owns a PreToolUse/PostToolUse event.
+
+    Claude Code includes ``agent_id`` (the native agent ID) in tool-use hook
+    payloads when the tool call runs inside a subagent; payloads for the main
+    agent's own tool calls do not carry the field. Without this check, every
+    subagent tool call is misattributed to the main agent.
+
+    Args:
+        raw_data: The raw JSON payload received from Claude Code on stdin.
+
+    Returns:
+        ``subagent_{native_agent_id}`` when the payload carries a non-empty
+        ``agent_id``, otherwise ``"main"``.
+    """
+    native_agent_id = raw_data.get("agent_id")
+    if native_agent_id:
+        return f"subagent_{native_agent_id}"
+    return "main"
+
+
 def _handle_session_start(raw_data: dict[str, Any], data: dict[str, Any]) -> None:
     """Populate *data* for a session_start event."""
     source = raw_data.get("source", "unknown")
@@ -132,7 +153,7 @@ def _handle_pre_tool_use(
         # instead of del so this is safe even if tool_input was never set.
         data.pop("tool_input", None)
     else:
-        data["agent_id"] = "main"
+        data["agent_id"] = _resolve_tool_event_agent_id(raw_data)
 
 
 def _handle_post_tool_use(
@@ -194,7 +215,7 @@ def _handle_post_tool_use(
                     if agent_path:
                         data["agent_transcript_path"] = agent_path
     else:
-        data["agent_id"] = "main"
+        data["agent_id"] = _resolve_tool_event_agent_id(raw_data)
 
 
 def _handle_native_subagent_start(

@@ -1,5 +1,7 @@
 """Tests for event_mapper subagent event handling."""
 
+from typing import Any
+
 from claude_office_hooks.event_mapper import map_event
 
 SESSION_ID = "test-session-001"
@@ -178,3 +180,53 @@ class TestNativeSubagentStop:
         }
         result = map_event("subagent_stop", raw, SESSION_ID)
         assert result is None
+
+
+class TestToolEventAgentAttribution:
+    """PreToolUse/PostToolUse for regular tools should honor the payload agent_id."""
+
+    def _read_payload(self, agent_id: str | None = None) -> dict[str, Any]:
+        raw: dict[str, Any] = {
+            "tool_name": "Read",
+            "tool_use_id": "tu_789",
+            "tool_input": {"file_path": "/tmp/file.md"},
+            "session_id": SESSION_ID,
+            "transcript_path": TRANSCRIPT,
+        }
+        if agent_id is not None:
+            raw["agent_id"] = agent_id
+            raw["agent_type"] = "general-purpose"
+        return raw
+
+    def test_pre_tool_use_with_agent_id_attributes_to_subagent(self) -> None:
+        result = map_event("pre_tool_use", self._read_payload("a5a60c7"), SESSION_ID)
+        assert result is not None
+        assert result["event_type"] == "pre_tool_use"
+        assert result["data"]["agent_id"] == "subagent_a5a60c7"
+
+    def test_pre_tool_use_without_agent_id_attributes_to_main(self) -> None:
+        result = map_event("pre_tool_use", self._read_payload(), SESSION_ID)
+        assert result is not None
+        assert result["data"]["agent_id"] == "main"
+
+    def test_pre_tool_use_with_empty_agent_id_attributes_to_main(self) -> None:
+        raw = self._read_payload()
+        raw["agent_id"] = ""
+        result = map_event("pre_tool_use", raw, SESSION_ID)
+        assert result is not None
+        assert result["data"]["agent_id"] == "main"
+
+    def test_post_tool_use_with_agent_id_attributes_to_subagent(self) -> None:
+        raw = self._read_payload("a5a60c7")
+        raw["tool_response"] = {"content": "done"}
+        result = map_event("post_tool_use", raw, SESSION_ID)
+        assert result is not None
+        assert result["event_type"] == "post_tool_use"
+        assert result["data"]["agent_id"] == "subagent_a5a60c7"
+
+    def test_post_tool_use_without_agent_id_attributes_to_main(self) -> None:
+        raw = self._read_payload()
+        raw["tool_response"] = {"content": "done"}
+        result = map_event("post_tool_use", raw, SESSION_ID)
+        assert result is not None
+        assert result["data"]["agent_id"] == "main"
